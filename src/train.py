@@ -5,6 +5,7 @@ import torch.nn as nn
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn import preprocessing
+import tez
 
 # write a class called GameDataset that instantiates a dataset with user_id, game_id, and rating
 class GameDataset:
@@ -39,7 +40,7 @@ def monitor_error(self, output, rating):
     return {"rmse": np.sqrt(mean_squared_error(output, rating))}
 
 #write a class called RecSysModel that build a neural network with an embedding layer
-class RecSysModel(nn.Module):
+class RecSysModel(tez.Model):
     def __init__(self, n_users, n_games):
         super(RecSysModel, self).__init__()
         self.user_embed = nn.Embedding(n_users, 32)
@@ -48,32 +49,14 @@ class RecSysModel(nn.Module):
         self.game_bias = nn.Embedding(n_games, 1)
         self.fc = nn.Linear(64, 1)
         self.step_scheduler_after = "epoch"
-        self.train_one_epoch = self.train_one_epoch
-        self.eval_one_epoch = self.eval_one_epoch
-
-    def fit(self, train_dataset, val_dataset, epochs=5, batch_size=1024):
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-        optimizer = self.fetch_optimizer()
-        scheduler = self.fetch_scheduler(optimizer)
-        for epoch in range(epochs):
-            print(f"Epoch {epoch + 1}/{epochs}")
-            print("-" * 10)
-            train_loss = self.train_one_epoch(train_loader, optimizer)
-            print(f"Train loss {train_loss}")
-            val_loss, eval_metrics = self.eval_one_epoch(val_loader)
-            print(f"Val loss {val_loss}")
-            print(f"Eval metrics {eval_metrics}")
-            scheduler.step()
-            print()
 
     def fetch_optimizer(self):
         return torch.optim.Adam(self.parameters(), lr=0.001)
     
-    def fetch_scheduler(self, optimizer):
-        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
+    def fetch_scheduler(self):
+        return torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=3, gamma=0.1)
     
-    def forward(self, users, games, ratings=None):
+    def forward(self, users, games, ratings):
         user_vecs = self.user_embed(users)
         game_vecs = self.game_embed(games)
         user_bias = self.user_bias(users)
@@ -81,10 +64,9 @@ class RecSysModel(nn.Module):
         output = torch.cat([user_vecs, game_vecs], dim=1)
         output = self.fc(output)
         output = output + user_bias + game_bias
-        if ratings:
-            loss = nn.MSELoss()(output, ratings.view(-1, 1))
-            eval_metrics = self.monitor_metrics(output, ratings.view(-1, 1))
-            return output, loss, eval_metrics
+        loss = nn.MSELoss()(output, ratings.view(-1, 1))
+        eval_metrics = self.monitor_metrics(output, ratings.view(-1, 1))
+        return output, loss, eval_metrics
         
 def train(df):
     lbl_user = preprocessing.LabelEncoder()
@@ -97,7 +79,7 @@ def train(df):
     val_dataset = create_dataset(val_df)
 
     model = RecSysModel(n_users=len(lbl_user.classes_), n_games=len(lbl_game.classes_))
-    model.fit(train_dataset, val_dataset, epochs=5)
+    model.fit(train_dataset, val_dataset, train_bs=1024, valid_bs=1024, epochs=10, device="cpu", fp16=False)
 
 if __name__ == "__main__":
     df = pd.read_csv("data/sample.csv")
